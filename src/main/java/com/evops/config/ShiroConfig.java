@@ -16,11 +16,14 @@ public class ShiroConfig {
         return realm;
     }
 
+
     @Bean
     public ShiroFilterChainDefinition shiroFilterChainDefinition() {
         DefaultShiroFilterChainDefinition chain = new DefaultShiroFilterChainDefinition();
         chain.addPathDefinition("/api/health", "anon");
         chain.addPathDefinition("/error", "anon");
+        // 业务接口使用 HTTP Basic（bootstrap/bootstrap），便于程序化调用与集成测试。
+        chain.addPathDefinition("/api/**", "authcBasic");
         chain.addPathDefinition("/**", "authc");
         return chain;
     }

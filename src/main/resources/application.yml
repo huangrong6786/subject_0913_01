@@ -29,6 +29,12 @@ mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
 
+shiro:
+  # 鉴权由 Shiro 过滤器链（authcBasic）完成，不启用 @RequiresPermissions 注解 AOP，
+  # 避免 Shiro 的 JDK 动态代理创建器与 Spring 事务的 CGLIB 代理创建器互相二次包装。
+  annotations:
+    enabled: false
+
 logging:
   level:
     com.evops: INFO
