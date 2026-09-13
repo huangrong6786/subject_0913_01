@@ -8,3 +8,10 @@ spring:
     init:
       mode: always
       schema-locations: classpath:schema.sql
+
+# 回归测试直接调用任务方法模拟定时/手工并发，关闭真实调度避免干扰
+evops:
+  task:
+    feeding-post:
+      enabled: false
+      lease-seconds: 300

@@ -89,13 +89,33 @@ public class FeedingRecordService {
     @Transactional
     public FeedingRecord post(Long id) {
         FeedingRecord record = getById(id);
-        if (record.getPosted() == 1) {
+        LocalDateTime now = LocalDateTime.now();
+        // 原子条件更新：并发重复落账时只有一方 affected=1，另一方按"已落账"拒绝。
+        int affected = feedingRecordMapper.markPostedIfPending(id, now);
+        if (affected == 0) {
             throw new BusinessException("投饵记录已落账，不能重复落账: " + record.getRecordNo());
         }
         record.setPosted(1);
-        record.setPostedTime(LocalDateTime.now());
-        feedingRecordMapper.updateById(record);
+        record.setPostedTime(now);
         return record;
+    }
+
+    /**
+     * 批量自动落账（定时任务/手工触发共用）：扫描所有未落账记录逐条原子落账。
+     * 故意不加整体事务：每条 CAS 更新独立提交，配合调用方的周期幂等台账构成
+     * "至少一次执行、副作用只生效一次"——执行方在批量中途异常退出后重试，
+     * 已落账记录 affected=0 被跳过，仅处理剩余记录，返回本次实际落账条数。
+     */
+    public int postPending() {
+        List<FeedingRecord> pending = feedingRecordMapper.selectList(new LambdaQueryWrapper<FeedingRecord>()
+                .eq(FeedingRecord::getPosted, 0)
+                .orderByAsc(FeedingRecord::getId));
+        LocalDateTime now = LocalDateTime.now();
+        int posted = 0;
+        for (FeedingRecord record : pending) {
+            posted += feedingRecordMapper.markPostedIfPending(record.getId(), now);
+        }
+        return posted;
     }
 
     /** 已落账记录不能直接删除。 */

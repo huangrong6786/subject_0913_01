@@ -35,6 +35,17 @@ shiro:
   annotations:
     enabled: false
 
+evops:
+  task:
+    # 投饵记录批量落账定时任务：定时与手工触发共用同一执行路径，
+    # 由 t_task_lock（租约锁）+ t_task_run（周期幂等台账）+ 落账 CAS 共同防重复处理。
+    feeding-post:
+      enabled: true
+      # 默认每天 02:00 执行当天业务周期（Spring 6 段 cron：秒 分 时 日 月 周）
+      cron: "0 0 2 * * *"
+      # 持锁/执行租约（秒）：异常退出后超过此时长可被下一次触发接管，不会永久阻塞
+      lease-seconds: 300
+
 logging:
   level:
     com.evops: INFO
