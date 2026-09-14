@@ -15,3 +15,9 @@ evops:
     feeding-post:
       enabled: false
       lease-seconds: 300
+  import:
+    # 小分片：让集成测试在小文件下也能覆盖多分片路径；规模测试自行覆盖大分片
+    shard-size: 5
+    storage-dir: ${java.io.tmpdir}/evops-test-imports
+    stale-seconds: 300
+    max-failures-in-response: 100

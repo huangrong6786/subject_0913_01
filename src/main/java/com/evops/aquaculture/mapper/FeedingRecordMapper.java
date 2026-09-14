@@ -19,4 +19,15 @@ public interface FeedingRecordMapper extends BaseMapper<FeedingRecord> {
     @Update("UPDATE t_feeding_record SET posted = 1, posted_time = #{postedTime}, update_time = #{postedTime} " +
             "WHERE id = #{id} AND posted = 0")
     int markPostedIfPending(@Param("id") Long id, @Param("postedTime") LocalDateTime postedTime);
+
+    /**
+     * 导入覆盖投饵量（CAS）：仅当记录仍未落账时允许改写。
+     * 与批量落账任务并发时，affected=0 表示记录已被抢先落账，导入行按“已锁定”拒绝。
+     */
+    @Update("UPDATE t_feeding_record SET amount_kg = #{amountKg}, feeding_time = #{feedingTime}, " +
+            "update_time = #{now} WHERE id = #{id} AND posted = 0")
+    int updateAmountIfUnposted(@Param("id") Long id,
+                               @Param("amountKg") java.math.BigDecimal amountKg,
+                               @Param("feedingTime") LocalDateTime feedingTime,
+                               @Param("now") LocalDateTime now);
 }

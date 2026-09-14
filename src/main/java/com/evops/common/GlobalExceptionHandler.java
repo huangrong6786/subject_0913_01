@@ -7,6 +7,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -33,6 +35,12 @@ public class GlobalExceptionHandler {
         FieldError fieldError = ex.getBindingResult().getFieldError();
         String message = fieldError == null ? "请求参数校验失败" : fieldError.getDefaultMessage();
         return ApiResponse.fail(message);
+    }
+
+    /** 文件上传问题：缺少文件部分、超出大小限制等。 */
+    @ExceptionHandler({MultipartException.class, MissingServletRequestPartException.class})
+    public ApiResponse<Void> handleMultipart(Exception ex) {
+        return ApiResponse.fail("文件上传失败: " + ex.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

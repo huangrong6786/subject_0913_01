@@ -10,6 +10,11 @@ spring:
     time-zone: Asia/Shanghai
     serialization:
       write-dates-as-timestamps: false
+  servlet:
+    multipart:
+      # 观测数据 CSV 批量导入：50,000 行约 5MB，放宽到 50MB
+      max-file-size: 50MB
+      max-request-size: 50MB
   datasource:
     url: jdbc:h2:file:./data/evops;AUTO_SERVER=TRUE
     username: sa
@@ -45,6 +50,15 @@ evops:
       cron: "0 0 2 * * *"
       # 持锁/执行租约（秒）：异常退出后超过此时长可被下一次触发接管，不会永久阻塞
       lease-seconds: 300
+  import:
+    # 观测数据 CSV 批量导入：按分片处理（数据行数/片），50,000 行默认切 50 片
+    shard-size: 1000
+    # 原始上传文件落盘目录：失败分片重试/断网续传的数据来源
+    storage-dir: ./data/imports
+    # 分片/批次僵死判定（秒）：RUNNING 超过此时长视为异常退出，可被接管重试
+    stale-seconds: 300
+    # 导入结果响应中携带的失败明细上限（完整明细走行明细接口）
+    max-failures-in-response: 100
 
 logging:
   level:
