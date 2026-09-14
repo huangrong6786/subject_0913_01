@@ -28,16 +28,20 @@ public class SensorReadingService {
     @Transactional
     public SensorReading report(ReadingCreateRequest request) {
         UnderwaterSensor sensor = sensorService.getById(request.getSensorId());
-        if (SensorStatus.OFFLINE.name().equals(sensor.getStatus())
-                || SensorStatus.MAINTENANCE.name().equals(sensor.getStatus())) {
-            throw new BusinessException("传感器当前状态为 " + sensor.getStatus() + "，不能上报读数: "
-                    + sensor.getSensorNo());
-        }
 
         SensorReading existing = readingMapper.selectOne(new LambdaQueryWrapper<SensorReading>()
                 .eq(SensorReading::getReadingNo, request.getReadingNo()));
         if (existing != null) {
             throw new BusinessException("读数流水号已存在: " + request.getReadingNo());
+        }
+
+        // 取传感器行锁与物理迁移串行化：迁移持锁期间读数等待，锁后重读，
+        // 迁移后新读数落新网箱；迁移前读数保留原箱，按迁移时刻切分时间轴。
+        sensor = readingMapper.selectSensorForUpdate(sensor.getId());
+        if (SensorStatus.OFFLINE.name().equals(sensor.getStatus())
+                || SensorStatus.MAINTENANCE.name().equals(sensor.getStatus())) {
+            throw new BusinessException("传感器当前状态为 " + sensor.getStatus() + "，不能上报读数: "
+                    + sensor.getSensorNo());
         }
 
         SensorReading reading = new SensorReading();
@@ -46,6 +50,8 @@ public class SensorReadingService {
         reading.setCageNo(sensor.getCageNo());
         reading.setMetricValue(request.getMetricValue());
         reading.setReadingTime(request.getReadingTime());
+        // 锚定设备当前迁移段：设备迁移后读数落新网箱，历史读数留原箱，按迁移事件切分时间轴。
+        reading.setMigrationId(sensor.getMigrationId());
         readingMapper.insert(reading);
         return reading;
     }

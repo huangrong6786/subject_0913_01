@@ -7,6 +7,8 @@ import com.evops.aquaculture.entity.FeedingRecord;
 import com.evops.aquaculture.entity.FishBatch;
 import com.evops.aquaculture.enums.PlanStatus;
 import com.evops.aquaculture.mapper.FeedingRecordMapper;
+import com.evops.aquaculture.mapper.FeedingPlanMapper;
+import com.evops.aquaculture.mapper.FishBatchMapper;
 import com.evops.common.BusinessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,13 +21,19 @@ import java.util.List;
 public class FeedingRecordService {
 
     private final FeedingRecordMapper feedingRecordMapper;
+    private final FeedingPlanMapper feedingPlanMapper;
+    private final FishBatchMapper fishBatchMapper;
     private final FishBatchService fishBatchService;
     private final FeedingPlanService feedingPlanService;
 
     public FeedingRecordService(FeedingRecordMapper feedingRecordMapper,
+                                FeedingPlanMapper feedingPlanMapper,
+                                FishBatchMapper fishBatchMapper,
                                 FishBatchService fishBatchService,
                                 FeedingPlanService feedingPlanService) {
         this.feedingRecordMapper = feedingRecordMapper;
+        this.feedingPlanMapper = feedingPlanMapper;
+        this.fishBatchMapper = fishBatchMapper;
         this.fishBatchService = fishBatchService;
         this.feedingPlanService = feedingPlanService;
     }
@@ -41,9 +49,16 @@ public class FeedingRecordService {
             throw new BusinessException("投饵流水号已存在: " + request.getRecordNo());
         }
 
+        // 取批次行锁与换箱/转场串行化：迁移持锁期间投饵登记等待，
+        // 锁后重读批次/计划，保证迁移后新投饵落新网箱，不会遗留在旧箱。
+        batch = fishBatchMapper.selectForUpdate(batch.getId());
         String cageNo = batch.getCageNo();
+        FeedingPlan plan = null;
         if (request.getPlanId() != null) {
-            FeedingPlan plan = feedingPlanService.getById(request.getPlanId());
+            plan = feedingPlanMapper.selectById(request.getPlanId());
+            if (plan == null) {
+                throw new BusinessException("投饵计划不存在: " + request.getPlanId());
+            }
             if (!plan.getBatchId().equals(batch.getId())) {
                 throw new BusinessException("投饵计划与鱼苗批次不匹配");
             }
@@ -62,6 +77,8 @@ public class FeedingRecordService {
         record.setAmountKg(request.getAmountKg());
         record.setFeedingTime(request.getFeedingTime());
         record.setPosted(0);
+        // 锚定当前迁移段：迁移后新投饵自然落在新网箱，并可按迁移事件切分时间轴。
+        record.setMigrationId(batch.getMigrationId());
         feedingRecordMapper.insert(record);
         return record;
     }

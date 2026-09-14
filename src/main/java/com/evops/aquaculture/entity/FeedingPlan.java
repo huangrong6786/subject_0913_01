@@ -37,4 +37,13 @@ public class FeedingPlan extends BaseEntity {
 
     /** ACTIVE/SUSPENDED/FINISHED */
     private String status;
+
+    /** 乐观锁版本：迁移切换 cage_no 与状态流转互斥，条件更新仅一方生效 */
+    private Integer version;
+
+    /** 最近一次随群迁移时间 */
+    private java.time.LocalDateTime migratedAt;
+
+    /** 锚定的迁移事件 ID */
+    private Long migrationId;
 }

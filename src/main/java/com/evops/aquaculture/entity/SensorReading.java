@@ -25,4 +25,7 @@ public class SensorReading extends BaseEntity {
     private BigDecimal metricValue;
 
     private LocalDateTime readingTime;
+
+    /** 读数归属锚点：读数发生时鱼群所处迁移段（历史读数留原箱，按 reading_time 与迁移时刻切分） */
+    private Long migrationId;
 }

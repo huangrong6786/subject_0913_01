@@ -62,6 +62,10 @@ public class UnderwaterSensorService {
                 .orderByDesc(UnderwaterSensor::getInstallTime));
     }
 
+    /**
+     * 传感器状态流转（乐观锁 CAS）：与物理迁移共用 version。
+     * 迁移快照采集后若设备被并发停用/维护，迁移方版本失配失败，停用方也无法在设备迁移后再改旧箱状态。
+     */
     @Transactional
     public UnderwaterSensor transitStatus(Long id, SensorStatusRequest request) {
         UnderwaterSensor sensor = getById(id);
@@ -72,8 +76,15 @@ public class UnderwaterSensorService {
             throw new BusinessException("非法的传感器状态: " + request.getTargetStatus()
                     + "，可选 ONLINE/OFFLINE/MAINTENANCE");
         }
+        int expected = sensor.getVersion() == null ? 0 : sensor.getVersion();
+        int affected = sensorMapper.updateStatusIfVersion(
+                id, target.name(), expected, java.time.LocalDateTime.now());
+        if (affected == 0) {
+            throw new BusinessException("传感器刚被并发处理（网箱迁移或其他状态变更），本次操作失败: "
+                    + sensor.getSensorNo());
+        }
         sensor.setStatus(target.name());
-        sensorMapper.updateById(sensor);
+        sensor.setVersion(expected + 1);
         return sensor;
     }
 

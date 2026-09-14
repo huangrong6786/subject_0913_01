@@ -79,7 +79,11 @@ public class FishBatchService {
         return fishBatchMapper.selectList(wrapper);
     }
 
-    /** 批次状态流转，仅允许枚举中定义的合法路径。 */
+    /**
+     * 批次状态流转，仅允许枚举中定义的合法路径。
+     * 条件更新（乐观锁 CAS）：与网箱迁移共用 version，状态改写期间发生迁移（或反过来）时，
+     * 后到一方版本失配失败，保证迁移与状态流转只有一个版本生效。
+     */
     @Transactional
     public FishBatch transitStatus(Long id, BatchStatusRequest request) {
         FishBatch batch = getById(id);
@@ -95,8 +99,15 @@ public class FishBatchService {
         if (!current.canTransitTo(target)) {
             throw new BusinessException("非法状态流转: " + current + " -> " + target);
         }
+        int expected = batch.getVersion() == null ? 0 : batch.getVersion();
+        int affected = fishBatchMapper.updateStatusIfVersion(
+                id, target.name(), expected, java.time.LocalDateTime.now());
+        if (affected == 0) {
+            throw new BusinessException("批次刚被并发改写（网箱迁移或其他状态流转），本次状态变更失败: "
+                    + batch.getBatchNo());
+        }
         batch.setStatus(target.name());
-        fishBatchMapper.updateById(batch);
+        batch.setVersion(expected + 1);
         return batch;
     }
 

@@ -1,6 +1,7 @@
 spring:
   datasource:
-    url: jdbc:h2:mem:evops-test;DB_CLOSE_DELAY=-1
+    # LOCK_TIMEOUT 放宽：并发迁移用例在 H2 表级锁下等待获胜方提交后做版本判定，避免误报锁超时
+    url: jdbc:h2:mem:evops-test;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000
     username: sa
     password:
     driver-class-name: org.h2.Driver

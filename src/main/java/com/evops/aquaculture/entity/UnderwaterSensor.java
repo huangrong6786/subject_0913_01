@@ -32,4 +32,13 @@ public class UnderwaterSensor extends BaseEntity {
 
     /** ONLINE/OFFLINE/MAINTENANCE */
     private String status;
+
+    /** 乐观锁版本：物理迁移与状态流转互斥，条件更新仅一方生效 */
+    private Integer version;
+
+    /** 最近一次随群迁移时间 */
+    private LocalDateTime migratedAt;
+
+    /** 锚定的迁移事件 ID */
+    private Long migrationId;
 }

@@ -35,5 +35,14 @@ public class FishBatch extends BaseEntity {
     /** 投苗时间 */
     private LocalDateTime stockingTime;
 
+    /** 乐观锁版本：每次迁移/状态改写 +1，迁移按版本条件更新，并发仅一方成功 */
+    private Integer version;
+
+    /** 最近一次迁移发生时间（迁移时间点把鱼群锚定到当前网箱） */
+    private LocalDateTime migratedAt;
+
+    /** 使其落位当前网箱的迁移事件 ID（首段在养为 null） */
+    private Long migrationId;
+
     private String remark;
 }

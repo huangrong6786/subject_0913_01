@@ -37,4 +37,7 @@ public class FeedingRecord extends BaseEntity {
     private Integer posted;
 
     private LocalDateTime postedTime;
+
+    /** 若该投饵由迁移后新箱登记，锚定使其落位的迁移事件（历史流水留原箱，按时间轴切分） */
+    private Long migrationId;
 }

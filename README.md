@@ -2,6 +2,8 @@
 
 在初始骨架上实现了深海网箱养殖批次与投饵监测基础闭环：维护鱼苗批次、投饵计划、水下传感器与读数、投饵记录、存活率报告、出网批次，记录网箱的投饵量、存活率和水下传感器读数，支持批次建立、状态流转、关联查询和统一 REST 返回。在此之上提供观测数据 CSV 批量导入：航次采集的投饵量、存活率与水下传感器读数按分片批量入库，文件校验和+业务键两级幂等，断网重传不重复，失败分片可重试，逐行隔离并返回明细。
 
+本迭代新增**网箱替换/转移（换箱/转场）流程**：以鱼苗批次（鱼群）为身份建立不可断裂的对象时间链，每个迁移事件固化原对象结束值与新对象起始值（鱼群估算量、累计投饵量、最新存活率、传感器最新读数）、发生时间与操作者，支持历史链路查询与交接守恒校验；链头与各对象采用乐观锁条件更新，两个操作者并发提交仅一个版本成功，迁移在同一事务内完成鱼群、未完成投饵计划、在线传感器的变更，历史快照只增不改并有数据库触发器防回写。
+
 技术栈：Java 8、Spring Boot 2.7、MyBatis-Plus、H2 本地文件数据库、Shiro（HTTP Basic，账号 `bootstrap/bootstrap`）、Thymeleaf。
 
 ## 业务模型
@@ -21,6 +23,8 @@
 | `t_obs_import_batch` | `import_no`、`file_checksum` | 导入批次台账，文件 SHA-256 唯一（文件级幂等） |
 | `t_obs_import_shard` | `(import_id, shard_index)` | 导入分片台账：PENDING/RUNNING/SUCCESS/PARTIAL/FAILED，失败分片可重试 |
 | `t_obs_import_row` | — | 逐行处理明细，失败行保留原始行号、字段、原值与失败原因 |
+| `t_cage_migration_chain` | `chain_no`、`batch_id` | 网箱迁移链（一批鱼一条），链头 current_cage_no/current_seq 即乐观锁版本 |
+| `t_cage_migration` | `migration_no`、`(chain_id, seq_no)` | 迁移事件（只增不改不删），固化双方交接值/时间/操作者/快照 JSON，触发器防回写 |
 
 ## 投饵批量落账定时任务（防重复定时处理）
 
@@ -123,6 +127,50 @@ evops.import:
 - CSV 导入：已落账投饵记录对应的观测行拒绝覆盖；网箱出网已验收/批次已终结后批次级观测拒绝覆盖；
   同一文件（校验和一致）重复导入不产生重复数据。
 
+## 网箱替换/转移（换箱/转场：不可断裂时间链）
+
+鱼群（鱼苗批次）在其生命周期内可多次换箱（`REPLACE`）或转场（`TRANSFER`）。以批次为身份维护
+一条迁移链 `t_cage_migration_chain`（`origin_cage_no` 起点 + `current_cage_no/current_seq` 链头指针），
+每迁移一次写入一条只增事件 `t_cage_migration`（`(chain_id, seq_no)` 唯一，seq 从 1 单调递增）。
+
+**记录内容（原对象结束值 / 新对象起始值 / 时间 / 操作者）**——事件列与 `snapshot_json` 快照固化：
+
+| 交接量 | 口径 |
+| --- | --- |
+| 鱼群估算量 `fish_estimate_count` | 最新存活率报告的存活数（无报告时取投苗数），原箱结束值=新箱起始值 |
+| 累计投饵量 `cumulative_feed_kg` | 迁移时刻批次**已落账**投饵量合计（未落账另列备查），沿链单调不减 |
+| 最新存活率 `latest_survival_rate` | 迁移时刻最新报告值 |
+| 传感器最新读数 | 快照逐设备列示最新读数/时间/读数条数；仅 ONLINE 设备物理迁移，OFFLINE/MAINTENANCE 留原箱 |
+| 发生时间/操作者 | `occurred_at`（缺省服务端当前时间，不得晚于现在）、`operator_id/operator_name` |
+
+操作者取请求体 `operatorId/operatorName`，缺省取请求头 `X-Operator-Id/X-Operator-Name`，再缺省回落
+HTTP Basic 登录账号。投饵量、存活率、传感器读数沿“迁移前留原箱、迁移后落新箱”的时间轴衔接，
+事件快照对每个迁移做 source==target 的交接守恒核对。
+
+**不可断裂时间链**：`GET /history/batch/{batchId}` 返回有序事件并校验
+`SEQ_CONTINUOUS`（1..N 无缺号）、`CAGE_LINKED`（前一事件新网箱=后一事件原网箱、首尾与链头一致）、
+`TIME_ORDERED`（发生时间严格递增）、`HANDOFF_EQUAL`（逐事件原对象结束值=新对象起始值）、
+`FEED_MONOTONIC`（累计已落账投饵量单调不减）、`SNAPSHOT_READABLE`；
+`GET /history/cage/{cageNo}` 可沿任一网箱正反向追溯经过它的全部鱼群链。
+
+**并发仅一个版本生效（困难级约束）**：
+
+1. **乐观锁/条件更新**：链头 `UPDATE ... WHERE current_seq=期望版本`；鱼群、投饵计划、传感器各自
+   `version` 上 `WHERE version=期望版本` 条件更新。请求可携带操作者决策时看到的
+   `expectedBatchVersion/expectedChainSeq`（计划状态接口携带 `expectedBatchVersion`）。
+   两个操作者基于同一旧版本并发提交，先提交方推进版本，后到方 affected=0，**整事务回滚**。
+2. **行锁串行化**：迁移与未完成投饵计划状态变更、投饵登记、存活率盘点、读数上报分别在批次行/传感器行
+   `SELECT ... FOR UPDATE` 上串行化，锁后以决策版本做 CAS，杜绝“双方读到稳定快照各自成功”。
+3. **同事务原子变更**：链头推进、事件写入、鱼群落位、未完成计划切换网箱、在线传感器迁移在**同一事务**，
+   任一步失配整体回滚，不产生“链推进了但对象没迁完”的半成品。
+4. **历史不可回写**：应用层对事件表只有 insert/select；数据库另有 BEFORE UPDATE/DELETE 触发器
+   （`MigrationImmutableTrigger`）拒绝任何改写/删除。
+
+**领域约束**：换箱/转场必须衔接鱼群估算量与累计投饵量（事件快照强制 source=target）；
+转场与未完成（ACTIVE/SUSPENDED）投饵计划的状态变更共享鱼群版本计数器，并发时只能一个版本生效；
+批次已终结/已验收（HARVESTED/CLOSED）锁定不能迁移；目标网箱有在养批次或与当前网箱相同被拒绝；
+FINISHED 计划不随群迁移，留在原箱归档。
+
 ## REST 接口（统一返回 `{success,message,data}`，需 Basic 认证，`/api/health` 除外）
 
 - `POST/GET /api/fish-batches`，`GET /api/fish-batches/{id}`，`GET /no/{batchNo}`，`PUT /{id}/status`，`GET /{id}/detail`，`DELETE /{id}`
@@ -139,6 +187,11 @@ evops.import:
 - `GET /api/observations/import/{importNo}`：导入批次状态与汇总（含分片进度与前 100 条失败明细）
 - `GET /api/observations/import/{importNo}/rows?outcome=FAILED&limit=&offset=`：逐行明细（行号/字段/原值/原因）
 - `GET /api/observations`（支持 `voyageNo/cageNo` 过滤）
+- `POST /api/cage-migrations`：换箱/转场（body：`migrationNo/batchId/targetCageNo/transferType/occurredAt/operatorId/operatorName/expectedBatchVersion/expectedChainSeq`），同一事务迁移鱼群、未完成投饵计划、在线传感器
+- `GET /api/cage-migrations`（支持 `batchId/sourceCageNo/targetCageNo` 过滤），`GET /{id}`、`GET /no/{migrationNo}`
+- `GET /api/cage-migrations/{id}/snapshot`：原对象结束值/新对象起始值交接快照
+- `GET /api/cage-migrations/history/batch/{batchId}`：鱼群维度不可断裂时间链 + 六项完整性/守恒校验
+- `GET /api/cage-migrations/history/cage/{cageNo}`：网箱维度，追溯经过该网箱的全部鱼群链
 
 时间参数使用 ISO-8601（如 `2026-09-13T07:00:00`）。
 
@@ -149,6 +202,9 @@ evops.import:
    `FeedingPostTaskConcurrencyRegressionTest` 覆盖定时与手工并发 5 轮、失败重试不重复、僵死锁租约接管等“重复定时处理”回归约束；
    `ObservationCsvImportIntegrationTest` 覆盖 CSV 导入混合行逐行隔离、两级幂等、已落账/已验收保护、校验和与解析边界；
    `ObsImportShardRetryTest` 覆盖分片失败重试与僵死分片接管；`ObsImportScaleShardingTest` 覆盖 50,000 行分片规模导入（均使用内存 H2）。
+   `CageMigrationIntegrationTest` 覆盖换箱/转场交接值连续可核对、两跳时间链不断裂、并发迁移仅一个版本成功、
+   转场与未完成投饵计划并发互斥、已终结/已验收锁定拒绝迁移、目标网箱占用/同箱/重复单号、历史快照触发器防回写、
+   操作者解析与鉴权。
 3. `mvn spring-boot:run` 启动，自动执行 `src/main/resources/schema.sql`；H2 文件写入 `data/evops`（已 gitignore）。
 
 配置说明：鉴权由 Shiro 过滤器链 `authcBasic` 完成，`shiro.annotations.enabled=false` 关闭注解 AOP，避免 Shiro 的 JDK 动态代理创建器与 Spring 事务的 CGLIB 代理创建器互相二次包装导致按具体类注入失败。
